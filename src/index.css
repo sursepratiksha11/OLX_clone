@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --olx-navy: #002f34;
+    --olx-navy-soft: #0a3f45;
+    --olx-teal: #23e5db;
+    --olx-teal-dark: #00a49f;
+    --olx-lemon: #ffce32;
+    --olx-bg: #f2f4f5;
+  }
+
+  * {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  body {
+    background: var(--olx-bg);
+    color: #1f2937;
+    @apply antialiased;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 #f1f5f9;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 5px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: #f1f5f9;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 3px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: #94a3b8;
+  }
+  .glass {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .bg-blue-500,
+  .bg-blue-600,
+  .bg-blue-700 {
+    background-color: var(--olx-navy) !important;
+  }
+
+  .text-blue-500,
+  .text-blue-600,
+  .text-blue-700 {
+    color: var(--olx-navy) !important;
+  }
+
+  .border-blue-400,
+  .border-blue-500,
+  .border-blue-600 {
+    border-color: var(--olx-teal-dark) !important;
+  }
+
+  .from-blue-500,
+  .to-blue-700 {
+    --tw-gradient-from: var(--olx-navy) var(--tw-gradient-from-position) !important;
+    --tw-gradient-to: rgb(0 47 52 / 0) var(--tw-gradient-to-position) !important;
+    --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+  }
+}
