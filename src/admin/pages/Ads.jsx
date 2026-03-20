@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 import {
   MdSearch, MdFilterList, MdCheckCircle, MdCancel, MdDeleteOutline,
   MdAdsClick, MdStar, MdReport,
 } from 'react-icons/md';
 import { FiEye } from 'react-icons/fi';
-import { fetchAds, approveAd, rejectAd, deleteAd as deleteAdApi } from '../services/adminApi';
+import { fetchAds, approveAd, rejectAd, deleteAd as deleteAdApi, featureAd } from '../services/adminApi';
 import useLivePolling from '../../hooks/useLivePolling';
 
 const initialAds = [
@@ -50,6 +51,7 @@ const StatusBadge = ({ status }) => {
 };
 
 export default function Ads() {
+  const navigate = useNavigate();
   const [ads, setAds] = useState(initialAds);
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('All');
@@ -58,6 +60,8 @@ export default function Ads() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [viewAd, setViewAd] = useState(null);
   const perPage = 8;
+
+  const apiRetryCountRef = useRef(0);
 
   const loadAds = async () => {
       try {
@@ -89,9 +93,13 @@ export default function Ads() {
             };
           });
           setAds(normalized);
+          apiRetryCountRef.current = 0;
         }
       } catch {
-        toast.error('Failed to load ads from API');
+        apiRetryCountRef.current += 1;
+        if (apiRetryCountRef.current === 3) {
+          toast.error('Failed to connect to ads API. Using demo data.');
+        }
       }
     };
 
@@ -110,6 +118,12 @@ export default function Ads() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const paged = filtered.slice((currentPage - 1) * perPage, currentPage * perPage);
 
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const changeStatus = async (id, newStatus) => {
     try {
       if (newStatus === 'active') {
@@ -127,12 +141,23 @@ export default function Ads() {
     }
   };
 
-  const toggleFeatured = (id) => {
-    setAds((prev) => prev.map((a) => {
-      if (a.id !== id) return a;
-      toast.success(a.featured ? 'Removed from featured' : '⭐ Marked as featured');
-      return { ...a, featured: !a.featured };
-    }));
+  const toggleFeatured = async (id) => {
+    const current = ads.find((a) => a.id === id);
+    if (!current) return;
+
+    try {
+      if (!current.featured) {
+        await featureAd(id);
+      }
+
+      setAds((prev) => prev.map((a) => {
+        if (a.id !== id) return a;
+        toast.success(a.featured ? 'Removed from featured' : '⭐ Marked as featured');
+        return { ...a, featured: !a.featured };
+      }));
+    } catch {
+      toast.error('Failed to update featured status');
+    }
   };
 
   const handleDelete = async () => {
@@ -145,6 +170,11 @@ export default function Ads() {
     } finally {
       setDeleteTarget(null);
     }
+  };
+
+  const openRelatedReports = (ad) => {
+    const query = encodeURIComponent(ad.title);
+    navigate(`/admin/reports?q=${query}&status=pending`);
   };
 
   const counts = {
@@ -267,9 +297,19 @@ export default function Ads() {
                   <td className="px-4 py-3 text-sm font-bold text-slate-800">{ad.price}</td>
                   <td className="px-4 py-3 text-sm text-slate-500">{ad.location}</td>
                   <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${ad.reportedCount > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>
-                      <MdReport size={12} /> {ad.reportedCount}
-                    </span>
+                    {ad.reportedCount > 0 ? (
+                      <button
+                        onClick={() => openRelatedReports(ad)}
+                        className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                        title="Open related reports"
+                      >
+                        <MdReport size={12} /> {ad.reportedCount}
+                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-slate-100 text-slate-600">
+                        <MdReport size={12} /> 0
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-400">{ad.postedDate}</td>
                   <td className="px-4 py-3"><StatusBadge status={ad.status} /></td>
@@ -345,6 +385,17 @@ export default function Ads() {
                 <p className="text-xs text-slate-400 mb-1">Description</p>
                 <p className="text-sm text-slate-700">{viewAd.description}</p>
               </div>
+              {viewAd.reportedCount > 0 && (
+                <button
+                  onClick={() => {
+                    openRelatedReports(viewAd);
+                    setViewAd(null);
+                  }}
+                  className="mt-3 w-full py-2.5 border border-red-200 bg-red-50 text-red-700 rounded-xl text-sm font-semibold hover:bg-red-100 transition-colors"
+                >
+                  View {viewAd.reportedCount} Related Report(s)
+                </button>
+              )}
               <button onClick={() => setViewAd(null)} className="mt-5 w-full py-2.5 border border-slate-200 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Close</button>
             </motion.div>
           </motion.div>

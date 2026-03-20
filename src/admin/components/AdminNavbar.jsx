@@ -17,7 +17,7 @@ const pageNames = {
   '/admin/settings': { title: 'Settings', subtitle: 'Admin configuration' },
 };
 
-const notifications = [
+const initialNotifications = [
   { id: 1, title: 'New user registered', desc: 'Rahul Sharma just joined', time: '2 min ago', unread: true, color: 'bg-blue-100 text-blue-600' },
   { id: 2, title: 'Ads pending approval', desc: '5 ads need your review', time: '10 min ago', unread: true, color: 'bg-amber-100 text-amber-600' },
   { id: 3, title: 'New report filed', desc: 'Fake iPhone listing reported', time: '1 hour ago', unread: true, color: 'bg-red-100 text-red-600' },
@@ -29,10 +29,19 @@ const AdminNavbar = ({ onMenuClick }) => {
   const { admin } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [notifications, setNotifications] = useState(initialNotifications);
   const notifRef = useRef(null);
 
   const page = pageNames[location.pathname] || { title: 'Admin Panel', subtitle: '' };
   const unreadCount = notifications.filter((n) => n.unread).length;
+
+  const markAllAsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+  };
+
+  const handleNotificationClick = (id) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, unread: false } : n)));
+  };
 
   useEffect(() => {
     const handleClick = (e) => {
@@ -108,6 +117,7 @@ const AdminNavbar = ({ onMenuClick }) => {
                 {notifications.map((n) => (
                   <div
                     key={n.id}
+                    onClick={() => handleNotificationClick(n.id)}
                     className={`flex gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer transition-colors ${n.unread ? 'bg-blue-50/30' : ''}`}
                   >
                     <div className={`w-8 h-8 rounded-lg ${n.color} flex items-center justify-center flex-shrink-0 mt-0.5`}>
@@ -123,7 +133,10 @@ const AdminNavbar = ({ onMenuClick }) => {
                 ))}
               </div>
               <div className="px-4 py-2.5 border-t border-slate-100 text-center">
-                <button className="text-xs text-olx-navy hover:text-olx-navySoft font-medium">
+                <button
+                  onClick={markAllAsRead}
+                  className="text-xs text-olx-navy hover:text-olx-navySoft font-medium"
+                >
                   Mark all as read
                 </button>
               </div>

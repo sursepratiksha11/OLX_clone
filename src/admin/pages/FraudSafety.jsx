@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { MdSecurity, MdSearch, MdBlock, MdGavel, MdFactCheck } from 'react-icons/md';
@@ -21,10 +21,42 @@ const fallbackCases = [
   { id: 102, title: 'Advance payment fraud', reportedBy: 'Priya', severity: 'medium', status: 'investigating' },
 ];
 
+const FLAGGED_USERS_KEY = 'olx-flagged-users';
+
 export default function FraudSafety() {
   const [users, setUsers] = useState(fallbackUsers);
   const [cases, setCases] = useState(fallbackCases);
   const [query, setQuery] = useState('');
+  const [flaggedUsers, setFlaggedUsers] = useState([]);
+
+  const loadFlaggedUsers = () => {
+    try {
+      const raw = localStorage.getItem(FLAGGED_USERS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setFlaggedUsers(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setFlaggedUsers([]);
+    }
+  };
+
+  useEffect(() => {
+    loadFlaggedUsers();
+
+    const onFlaggedUsersUpdated = () => loadFlaggedUsers();
+    const onStorage = (event) => {
+      if (event.key === FLAGGED_USERS_KEY) {
+        loadFlaggedUsers();
+      }
+    };
+
+    window.addEventListener('olx-flagged-users-updated', onFlaggedUsersUpdated);
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      window.removeEventListener('olx-flagged-users-updated', onFlaggedUsersUpdated);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   useLivePolling(async () => {
     try {
@@ -69,11 +101,31 @@ export default function FraudSafety() {
     }
   }, 15000, []);
 
+  const mergedUsers = useMemo(() => {
+    const flaggedNormalized = flaggedUsers.map((u, index) => ({
+      id: u?.id ?? `flag-${index + 1}`,
+      name: u?.name ?? `Flagged User ${index + 1}`,
+      riskScore: Number(u?.riskScore ?? 90),
+      reason: u?.reason ?? 'Flagged from reports',
+      status: String(u?.status ?? 'open').toLowerCase(),
+      source: 'reports',
+    }));
+
+    const merged = [...users];
+    flaggedNormalized.forEach((flagged) => {
+      if (!merged.some((u) => u.name === flagged.name)) {
+        merged.push(flagged);
+      }
+    });
+
+    return merged;
+  }, [users, flaggedUsers]);
+
   const filteredUsers = useMemo(
-    () => users.filter((u) =>
+    () => mergedUsers.filter((u) =>
       `${u.name} ${u.reason}`.toLowerCase().includes(query.toLowerCase())
     ),
-    [users, query]
+    [mergedUsers, query]
   );
 
   const filteredCases = useMemo(
@@ -84,9 +136,22 @@ export default function FraudSafety() {
   );
 
   const handleBlock = async (id) => {
+    const target = mergedUsers.find((u) => u.id === id);
+    if (!target) return;
+
     try {
-      await blockFraudUser(id);
+      if (target.source !== 'reports') {
+        await blockFraudUser(id);
+      }
       setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: 'blocked' } : u)));
+
+      if (target.source === 'reports') {
+        const nextFlagged = flaggedUsers.map((u) => (u.id === id ? { ...u, status: 'blocked' } : u));
+        setFlaggedUsers(nextFlagged);
+        localStorage.setItem(FLAGGED_USERS_KEY, JSON.stringify(nextFlagged));
+        window.dispatchEvent(new Event('olx-flagged-users-updated'));
+      }
+
       toast.success('Fraudulent account blocked');
     } catch {
       toast.error('Failed to block account');
@@ -140,24 +205,32 @@ export default function FraudSafety() {
             <h3 className="font-bold text-slate-800">Suspicious Users</h3>
           </div>
           <div className="divide-y divide-slate-100">
-            {filteredUsers.map((u) => (
-              <div key={u.id} className="px-5 py-3 flex items-center gap-3">
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-slate-800">{u.name}</p>
-                  <p className="text-xs text-slate-500">{u.reason}</p>
-                  <p className="text-xs mt-1"><span className="font-semibold text-red-600">Risk:</span> {u.riskScore}%</p>
-                </div>
-                <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${u.status === 'blocked' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                  {u.status}
-                </span>
-                <button
-                  onClick={() => handleBlock(u.id)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700 hover:bg-red-100"
-                >
-                  <MdBlock size={13} /> Block
-                </button>
-              </div>
-            ))}
+            {filteredUsers.length === 0 ? (
+              <div className="px-5 py-8 text-sm text-slate-500 text-center">No suspicious users match your search.</div>
+            ) : (
+              filteredUsers.map((u) => {
+                const isBlocked = u.status === 'blocked';
+                return (
+                  <div key={u.id} className="px-5 py-3 flex items-center gap-3">
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-slate-800">{u.name}</p>
+                      <p className="text-xs text-slate-500">{u.reason}</p>
+                      <p className="text-xs mt-1"><span className="font-semibold text-red-600">Risk:</span> {u.riskScore}%</p>
+                    </div>
+                    <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${isBlocked ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {u.status}
+                    </span>
+                    <button
+                      disabled={isBlocked}
+                      onClick={() => handleBlock(u.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <MdBlock size={13} /> {isBlocked ? 'Blocked' : 'Block'}
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
         </motion.div>
 
@@ -167,22 +240,30 @@ export default function FraudSafety() {
             <h3 className="font-bold text-slate-800">Fraud Cases</h3>
           </div>
           <div className="divide-y divide-slate-100">
-            {filteredCases.map((c) => (
-              <div key={c.id} className="px-5 py-3 flex items-center gap-3">
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-slate-800">{c.title}</p>
-                  <p className="text-xs text-slate-500">Reported by {c.reportedBy}</p>
-                  <p className="text-xs mt-1 capitalize"><span className="font-semibold">Severity:</span> {c.severity}</p>
-                </div>
-                <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${c.status === 'closed' ? 'bg-green-100 text-green-700' : c.status === 'investigating' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                  {c.status}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => handleInvestigate(c.id)} className="px-2.5 py-1.5 text-xs rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100">Investigate</button>
-                  <button onClick={() => handleClose(c.id)} className="px-2.5 py-1.5 text-xs rounded-lg border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 inline-flex items-center gap-1"><MdFactCheck size={12} /> Close</button>
-                </div>
-              </div>
-            ))}
+            {filteredCases.length === 0 ? (
+              <div className="px-5 py-8 text-sm text-slate-500 text-center">No fraud cases match your search.</div>
+            ) : (
+              filteredCases.map((c) => {
+                const isClosed = c.status === 'closed';
+                const isInvestigating = c.status === 'investigating';
+                return (
+                  <div key={c.id} className="px-5 py-3 flex items-center gap-3">
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-slate-800">{c.title}</p>
+                      <p className="text-xs text-slate-500">Reported by {c.reportedBy}</p>
+                      <p className="text-xs mt-1 capitalize"><span className="font-semibold">Severity:</span> {c.severity}</p>
+                    </div>
+                    <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${isClosed ? 'bg-green-100 text-green-700' : isInvestigating ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {c.status}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button disabled={isClosed || isInvestigating} onClick={() => handleInvestigate(c.id)} className="px-2.5 py-1.5 text-xs rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">Investigate</button>
+                      <button disabled={isClosed} onClick={() => handleClose(c.id)} className="px-2.5 py-1.5 text-xs rounded-lg border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"><MdFactCheck size={12} /> Close</button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </motion.div>
       </div>

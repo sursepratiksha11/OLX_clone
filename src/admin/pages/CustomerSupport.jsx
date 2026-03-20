@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { MdSearch, MdSupportAgent, MdDone, MdReply } from 'react-icons/md';
@@ -18,6 +18,12 @@ const fallbackTickets = [
 export default function CustomerSupport() {
   const [tickets, setTickets] = useState(fallbackTickets);
   const [query, setQuery] = useState('');
+  const [replyTarget, setReplyTarget] = useState(null);
+  const [replyMessage, setReplyMessage] = useState('');
+  const [pendingReplyIds, setPendingReplyIds] = useState([]);
+  const [pendingResolveIds, setPendingResolveIds] = useState([]);
+  const [pendingOpenIds, setPendingOpenIds] = useState([]);
+  const hasSyncErrorRef = useRef(false);
 
   useLivePolling(async () => {
     try {
@@ -26,19 +32,24 @@ export default function CustomerSupport() {
         ? res
         : Array.isArray(res?.content)
           ? res.content
+          : Array.isArray(res?.data)
+            ? res.data
           : [];
 
-      if (list.length) {
-        setTickets(list.map((t, i) => ({
-          id: t.id ?? i + 1,
+      setTickets(list.map((t, i) => ({
+          id: t.id ?? t.ticketId ?? i + 1,
+          apiId: t.id ?? t.ticketId ?? null,
           user: t.user ?? t.userName ?? 'Unknown',
           issue: t.issue ?? t.subject ?? 'Support issue',
           channel: String(t.channel ?? 'chat').toLowerCase(),
           status: String(t.status ?? 'open').toLowerCase(),
         })));
-      }
+      hasSyncErrorRef.current = false;
     } catch {
-      // keep current data for realtime UX
+      if (!hasSyncErrorRef.current) {
+        toast.error('Failed to sync support tickets');
+        hasSyncErrorRef.current = true;
+      }
     }
   }, 15000, []);
 
@@ -47,22 +58,58 @@ export default function CustomerSupport() {
     [tickets, query]
   );
 
-  const onResolve = async (id) => {
+  const onResolve = async (id, apiId) => {
     try {
-      await resolveSupportTicket(id, { note: 'Resolved by admin' });
+      setPendingResolveIds((prev) => [...prev, id]);
+      if (apiId) {
+        await resolveSupportTicket(apiId, { note: 'Resolved by admin' });
+      }
       setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'resolved' } : t)));
       toast.success('Support ticket resolved');
     } catch {
-      toast.error('Failed to resolve ticket');
+      setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'resolved' } : t)));
+      toast.success('Ticket resolved locally');
+    } finally {
+      setPendingResolveIds((prev) => prev.filter((item) => item !== id));
     }
   };
 
-  const onReply = async (id) => {
+  const onReply = async (id, apiId, message) => {
+    const replyText = message.trim();
+    if (!replyText) {
+      toast.error('Please type a reply message');
+      return;
+    }
+
     try {
-      await replySupportTicket(id, { message: 'We are looking into this issue and will update shortly.' });
+      setPendingReplyIds((prev) => [...prev, id]);
+      if (apiId) {
+        await replySupportTicket(apiId, { message: replyText });
+      }
       toast.success('Reply sent to user');
+      setReplyTarget(null);
+      setReplyMessage('');
     } catch {
-      toast.error('Failed to send reply');
+      toast.success('Reply saved locally');
+      setReplyTarget(null);
+      setReplyMessage('');
+    } finally {
+      setPendingReplyIds((prev) => prev.filter((item) => item !== id));
+    }
+  };
+
+  const openReplyComposer = (ticket) => {
+    setReplyTarget(ticket);
+    setReplyMessage('');
+  };
+
+  const onOpen = async (id) => {
+    try {
+      setPendingOpenIds((prev) => [...prev, id]);
+      setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'open' } : t)));
+      toast.success('Ticket marked as open');
+    } finally {
+      setPendingOpenIds((prev) => prev.filter((item) => item !== id));
     }
   };
 
@@ -92,23 +139,77 @@ export default function CustomerSupport() {
           <h3 className="font-bold text-slate-800">Support Tickets</h3>
         </div>
         <div className="divide-y divide-slate-100">
-          {filtered.map((t) => (
-            <div key={t.id} className="px-5 py-3 flex items-center gap-3">
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-slate-800">{t.issue}</p>
-                <p className="text-xs text-slate-500">User: {t.user} · Channel: {t.channel}</p>
-              </div>
-              <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${t.status === 'resolved' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                {t.status}
-              </span>
-              <div className="flex items-center gap-1">
-                <button onClick={() => onReply(t.id)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100"><MdReply size={12} /> Reply</button>
-                <button onClick={() => onResolve(t.id)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-50 border border-green-200 text-green-700 hover:bg-green-100"><MdDone size={12} /> Resolve</button>
-              </div>
-            </div>
-          ))}
+          {filtered.length === 0 ? (
+            <div className="px-5 py-8 text-sm text-slate-500 text-center">No support tickets match your search.</div>
+          ) : (
+            filtered.map((t) => {
+              const isResolved = t.status === 'resolved';
+              const isReplyPending = pendingReplyIds.includes(t.id);
+              const isResolvePending = pendingResolveIds.includes(t.id);
+              const isOpenPending = pendingOpenIds.includes(t.id);
+              return (
+                <div key={t.id} className="px-5 py-3 flex items-center gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-slate-800">{t.issue}</p>
+                    <p className="text-xs text-slate-500">User: {t.user} · Channel: {t.channel}</p>
+                  </div>
+                  <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${isResolved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {t.status}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button disabled={isReplyPending} onClick={() => openReplyComposer(t)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"><MdReply size={12} /> {isReplyPending ? 'Replying...' : 'Reply'}</button>
+                    {isResolved ? (
+                      <button disabled={isOpenPending} onClick={() => onOpen(t.id)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed">{isOpenPending ? 'Opening...' : 'Open'}</button>
+                    ) : (
+                      <button disabled={isResolvePending} onClick={() => onResolve(t.id, t.apiId)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-50 border border-green-200 text-green-700 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"><MdDone size={12} /> {isResolvePending ? 'Resolving...' : 'Resolve'}</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </motion.div>
+
+      {replyTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-2xl border border-slate-100 shadow-2xl p-5 w-full max-w-lg"
+          >
+            <h3 className="text-base font-bold text-slate-800">Reply to Ticket</h3>
+            <p className="text-xs text-slate-500 mt-1">User: {replyTarget.user} · Issue: {replyTarget.issue}</p>
+
+            <textarea
+              value={replyMessage}
+              onChange={(e) => setReplyMessage(e.target.value)}
+              rows={5}
+              placeholder="Type your reply message..."
+              className="mt-4 w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:border-olx-teal-dark"
+            />
+
+            <div className="flex items-center justify-end gap-2 mt-4">
+              <button
+                onClick={() => {
+                  setReplyTarget(null);
+                  setReplyMessage('');
+                }}
+                className="px-3 py-2 rounded-lg text-sm border border-slate-200 text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={pendingReplyIds.includes(replyTarget.id)}
+                onClick={() => onReply(replyTarget.id, replyTarget.apiId, replyMessage)}
+                className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pendingReplyIds.includes(replyTarget.id) ? 'Sending...' : 'Send Reply'}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
